@@ -44,6 +44,30 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace csl {
                 memcpy(dest.get(), src.get(), dest.size(), stream);
         }
 
+        namespace detail {
+            template <class T>
+            void assertGEMMCompatiblity(const TensorSpan<T>& result, bool transa, const TensorView<T>& A, bool transb, const TensorView<T>& B) {
+                /* check dimension requirements for matrix multiplication */
+                if (!transa && !transb) {
+                    CV_Assert(A.get_axis_size(-2) == result.get_axis_size(-2));
+                    CV_Assert(A.get_axis_size(-1) == B.get_axis_size(-2));
+                    CV_Assert(B.get_axis_size(-1) == result.get_axis_size(-1));
+                } else if (!transa && transb) {
+                    CV_Assert(A.get_axis_size(-2) == result.get_axis_size(-2));
+                    CV_Assert(A.get_axis_size(-1) == B.get_axis_size(-1));
+                    CV_Assert(B.get_axis_size(-2) == result.get_axis_size(-1));
+                } else if (transa && !transb) {
+                    CV_Assert(A.get_axis_size(-1) == result.get_axis_size(-2));
+                    CV_Assert(A.get_axis_size(-2) == B.get_axis_size(-2));
+                    CV_Assert(B.get_axis_size(-1) == result.get_axis_size(-1));
+                } else {
+                    CV_Assert(A.get_axis_size(-1) == result.get_axis_size(-2));
+                    CV_Assert(A.get_axis_size(-2) == B.get_axis_size(-1));
+                    CV_Assert(B.get_axis_size(-2) == result.get_axis_size(-1));
+                }
+            }
+        }
+
         /** @brief performs generalized matrix-multiplication
          *
          * Pre-conditions:
@@ -54,35 +78,18 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace csl {
          */
         template <class T> inline
         void gemm(const cublas::Handle& handle, T beta, TensorSpan<T> result, T alpha, bool transa, TensorView<T> A, bool transb, TensorView<T> B) {
-            /* matrix operations can be performed only on rank two or less tensors */
-            CV_Assert(get_effective_rank(A) <= 2 &&
-                get_effective_rank(B) <= 2 &&
-                get_effective_rank(result) <= 2);
-
-            /* check dimension requirements for matrix multiplication */
-            if (!transa && !transb) {
-                CV_Assert(A.get_axis_size(-2) == result.get_axis_size(-2));
-                CV_Assert(A.get_axis_size(-1) == B.get_axis_size(-2));
-                CV_Assert(B.get_axis_size(-1) == result.get_axis_size(-1));
-            } else if (!transa && transb) {
-                CV_Assert(A.get_axis_size(-2) == result.get_axis_size(-2));
-                CV_Assert(A.get_axis_size(-1) == B.get_axis_size(-1));
-                CV_Assert(B.get_axis_size(-2) == result.get_axis_size(-1));
-            } else if (transa && !transb) {
-                CV_Assert(A.get_axis_size(-1) == result.get_axis_size(-2));
-                CV_Assert(A.get_axis_size(-2) == B.get_axis_size(-2));
-                CV_Assert(B.get_axis_size(-1) == result.get_axis_size(-1));
-            } else {
-                CV_Assert(A.get_axis_size(-1) == result.get_axis_size(-2));
-                CV_Assert(A.get_axis_size(-2) == B.get_axis_size(-1));
-                CV_Assert(B.get_axis_size(-2) == result.get_axis_size(-1));
-            }
+            /* matrix operations can be performed only on tensors with rank two or below */
+            CV_Assert(get_effective_rank(A) <= 2);
+            CV_Assert(get_effective_rank(B) <= 2);
+            CV_Assert(get_effective_rank(result) <= 2);
 
             const auto result_nr = result.get_axis_size(-2);
             const auto result_nc = result.get_axis_size(-1);
             const auto common_dim = A.get_axis_size(transa ? -2 : -1);
             const auto A_nc = A.get_axis_size(-1);
             const auto B_nc = B.get_axis_size(-1);
+
+            detail::assertGEMMCompatiblity(result, transa, A, transb, B);
 
             /* tensors are stored in row-major but cublas::gemm operates on column-major matrices
              * a row-major matrix when read as column-major matrix gives the transpose of the intended matrix
@@ -101,6 +108,47 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace csl {
                 alpha, B.get(), B_nc,
                 A.get(), A_nc,
                 beta, result.get(), result_nc);
+        }
+
+        /** @brief performs generalized matrix-multiplication for a strided batch of matrices
+         *
+         * Pre-conditions:
+         * - A, B and C must be rank three tensors with dimensions (batch, rows, cols)
+         * - the last two axes of \p A and \p B must meet the mathematical requirements for matrix multiplication
+         * - \p result must be large enough to hold the result and the matrices must not overlap in memory
+         * - batch dimension should be same in \p A, \p B and \p result
+         *
+         * Exception Guarantee: Basic
+         */
+        template <class T> inline
+        void gemmStridedBatched(const cublas::Handle& handle, T beta, TensorSpan<T> result, T alpha, bool transa, TensorView<T> A, bool transb, TensorView<T> B) {
+            CV_Assert(A.rank() == 3);
+            CV_Assert(B.rank() == 3);
+            CV_Assert(result.rank() == 3);
+
+            const auto batch_size = result.get_axis_size(0);
+            CV_Assert(batch_size == A.get_axis_size(0));
+            CV_Assert(batch_size == B.get_axis_size(0));
+
+            detail::assertGEMMCompatiblity(result, transa, A, transb, B);
+
+            const auto result_nr = result.get_axis_size(-2);
+            const auto result_nc = result.get_axis_size(-1);
+            const auto common_dim = A.get_axis_size(transa ? -2 : -1);
+            const auto A_nc = A.get_axis_size(-1);
+            const auto B_nc = B.get_axis_size(-1);
+
+            std::size_t strideA = (A.size() / batch_size),
+                        strideB = (B.size() / batch_size),
+                        strideC = (result.size() / batch_size);
+
+            cublas::gemmStridedBatched<T>(handle,
+                transb, transa,
+                result_nc, result_nr, common_dim,
+                alpha, B.get(), B_nc, strideB,
+                A.get(), A_nc, strideA,
+                beta, result.get(), result_nc, strideC,
+                batch_size);
         }
 
         /** @brief performs element-wise addition with broadcasting
@@ -152,6 +200,7 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace csl {
             /* bias and activation (only RELU supported) */
             std::vector<std::size_t> bias_shape;
             ActivationType activation_type; /* MUST BE identity if there is no bias and ReLU if there is bias */
+            bool eltwise;
         };
 
         Convolution() = default;
@@ -164,19 +213,21 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace csl {
             filterDesc = FilterDescriptor(params.filter_shape);
             convDesc = ConvolutionDescriptor(params.padding, params.stride, params.dilation, params.groups);
 
-            if (!params.bias_shape.empty()) {
-                CV_Assert(params.activation_type == ActivationType::RELU);
-                biasTensorDesc = TensorDescriptor(params.bias_shape);
-                activationDesc = ActivationDescriptor(params.activation_type, 0.0);
-            } else {
-                CV_Assert(params.activation_type == ActivationType::IDENTITY);
-            }
-
             std::vector<int> output_dims;
             getConvolutionForwardOutputDim(convDesc, filterDesc, inputTensorDesc, output_dims);
             outputTensorDesc = TensorDescriptor(output_dims);
 
             algo = ConvolutionAlgorithm(cudnnHandle, convDesc, filterDesc, inputTensorDesc, outputTensorDesc);
+
+            if (!params.bias_shape.empty()) {
+                CV_Assert(params.activation_type == ActivationType::RELU);
+                biasTensorDesc = TensorDescriptor(params.bias_shape);
+                if (params.eltwise)
+                    eltwiseTensorDesc = TensorDescriptor(output_dims);
+                activationDesc = ActivationDescriptor(params.activation_type, 0.0);
+            } else {
+                CV_Assert(params.activation_type == ActivationType::IDENTITY);
+            }
         }
 
         Convolution& operator=(const Convolution&) = delete;
@@ -208,6 +259,19 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace csl {
             );
         }
 
+        void convolve_with_bias_eltwise_activation(TensorSpan<T> output, TensorView<T> input, TensorView<T> filters, TensorView<T> bias, TensorView<T> eltwise, WorkspaceInstance scratchpad) {
+            cudnn::convolve_with_bias_eltwise_activation<T>(
+                cudnnHandle,
+                1.0, convDesc, algo, scratchpad,
+                filterDesc, filters.get(),
+                inputTensorDesc, input.get(),
+                biasTensorDesc, bias.get(),
+                1.0, eltwiseTensorDesc, eltwise.get(),
+                activationDesc,
+                outputTensorDesc, output.get()
+            );
+        }
+
     private:
         cudnn::Handle cudnnHandle;
         TensorDescriptor inputTensorDesc, outputTensorDesc;
@@ -215,6 +279,7 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace csl {
         ConvolutionDescriptor convDesc;
         ConvolutionAlgorithm algo;
         TensorDescriptor biasTensorDesc;
+        TensorDescriptor eltwiseTensorDesc;
         ActivationDescriptor activationDesc;
     };
 

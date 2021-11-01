@@ -1052,9 +1052,9 @@ CV_IMPL void cvFindExtrinsicCameraParams2( const CvMat* objectPoints,
 
     int i, count;
     double a[9], ar[9]={1,0,0,0,1,0,0,0,1}, R[9];
-    double MM[9], U[9], V[9], W[3];
+    double MM[9] = { 0 }, U[9] = { 0 }, V[9] = { 0 }, W[3] = { 0 };
     cv::Scalar Mc;
-    double param[6];
+    double param[6] = { 0 };
     CvMat matA = cvMat( 3, 3, CV_64F, a );
     CvMat _Ar = cvMat( 3, 3, CV_64F, ar );
     CvMat matR = cvMat( 3, 3, CV_64F, R );
@@ -1274,8 +1274,9 @@ CV_IMPL void cvInitIntrinsicParams2D( const CvMat* objectPoints,
     CvMat matH = cvMat( 3, 3, CV_64F, H );
     CvMat _f = cvMat( 2, 1, CV_64F, f );
 
-    assert( CV_MAT_TYPE(npoints->type) == CV_32SC1 &&
-            CV_IS_MAT_CONT(npoints->type) );
+    CV_Assert(npoints);
+    CV_Assert(CV_MAT_TYPE(npoints->type) == CV_32SC1);
+    CV_Assert(CV_IS_MAT_CONT(npoints->type));
     nimages = npoints->rows + npoints->cols - 1;
 
     if( (CV_MAT_TYPE(objectPoints->type) != CV_32FC3 &&
@@ -1296,6 +1297,9 @@ CV_IMPL void cvInitIntrinsicParams2D( const CvMat* objectPoints,
     // extract vanishing points in order to obtain initial value for the focal length
     for( i = 0, pos = 0; i < nimages; i++, pos += ni )
     {
+        CV_DbgAssert(npoints->data.i);
+        CV_DbgAssert(matA && matA->data.db);
+        CV_DbgAssert(_b && _b->data.db);
         double* Ap = matA->data.db + i*4;
         double* bp = _b->data.db + i*2;
         ni = npoints->data.i[i];
@@ -1306,6 +1310,7 @@ CV_IMPL void cvInitIntrinsicParams2D( const CvMat* objectPoints,
         cvGetCols( imagePoints, &_m, pos, pos + ni );
 
         cvFindHomography( &matM, &_m, &matH );
+        CV_DbgAssert(_allH && _allH->data.db);
         memcpy( _allH->data.db + i*9, H, sizeof(H) );
 
         H[0] -= H[6]*a[2]; H[1] -= H[7]*a[2]; H[2] -= H[8]*a[2];
@@ -1936,7 +1941,7 @@ void cvCalibrationMatrixValues( const CvMat *calibMatr, CvSize imgSize,
         CV_Error(CV_StsNullPtr, "Some of parameters is a NULL pointer!");
 
     if(!CV_IS_MAT(calibMatr))
-        CV_Error(CV_StsUnsupportedFormat, "Input parameters must be a matrices!");
+        CV_Error(CV_StsUnsupportedFormat, "Input parameters must be matrices!");
 
     double dummy = .0;
     Point2d pp;
@@ -3284,7 +3289,7 @@ cvDecomposeProjectionMatrix( const CvMat *projMatr, CvMat *calibMatr,
         CV_Error(CV_StsNullPtr, "Some of parameters is a NULL pointer!");
 
     if(!CV_IS_MAT(projMatr) || !CV_IS_MAT(calibMatr) || !CV_IS_MAT(rotMatr) || !CV_IS_MAT(posVect))
-        CV_Error(CV_StsUnsupportedFormat, "Input parameters must be a matrices!");
+        CV_Error(CV_StsUnsupportedFormat, "Input parameters must be matrices!");
 
     if(projMatr->cols != 4 || projMatr->rows != 3)
         CV_Error(CV_StsUnmatchedSizes, "Size of projection matrix must be 3x4!");
@@ -4145,6 +4150,7 @@ static void adjust3rdMatrix(InputArrayOfArrays _imgpt1_0,
 
     double y1_ = 0, y2_ = 0, y1y1_ = 0, y1y2_ = 0;
     size_t n = imgpt1.size();
+    CV_DbgAssert(n > 0);
 
     for( size_t i = 0; i < n; i++ )
     {

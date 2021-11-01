@@ -125,7 +125,7 @@ public:
 
         InferenceEngine::Builder::Layer ieLayer(name);
         ieLayer.setName(name);
-        if (preferableTarget == DNN_TARGET_MYRIAD)
+        if (preferableTarget == DNN_TARGET_MYRIAD || preferableTarget == DNN_TARGET_HDDL)
         {
             ieLayer.setType("Copy");
         }
@@ -166,6 +166,11 @@ public:
     }
 #endif
 
+    virtual bool tryQuantize(const std::vector<std::vector<float> > &scales,
+                             const std::vector<std::vector<int> > &zeropoints, LayerParams& params) CV_OVERRIDE
+    {
+        return true;
+    }
 };
 
 Ptr<Layer> BlankLayer::create(const LayerParams& params)

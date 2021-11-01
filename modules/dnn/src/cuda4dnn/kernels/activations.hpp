@@ -13,7 +13,13 @@
 namespace cv { namespace dnn { namespace cuda4dnn { namespace kernels {
 
     template <class T>
-    void abs(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
+    void relu(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input, T slope);
+
+    template <class T>
+    void clipped_relu(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input, T floor, T ceiling);
+
+    template <class T>
+    void axiswise_relu(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input, std::size_t inner_size, csl::View<T> slope);
 
     template <class T>
     void tanh(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
@@ -28,22 +34,37 @@ namespace cv { namespace dnn { namespace cuda4dnn { namespace kernels {
     void sigmoid(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
 
     template <class T>
-    void bnll(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
-
-    template <class T>
     void elu(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
 
     template <class T>
-    void relu(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input, T slope);
+    void abs(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
 
     template <class T>
-    void clipped_relu(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input, T floor, T ceiling);
+    void bnll(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
 
     template <class T>
-    void axiswise_relu(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input, std::size_t inner_size, csl::View<T> slope);
+    void ceil(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
+
+    template <class T>
+    void floor(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
+
+    template <class T>
+    void log(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
+
+    template <class T>
+    void rint(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
+
+    template <class T>
+    void sqrt(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
+
+    template <class T>
+    void not_k(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input);
 
     template <class T>
     void power(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input, T exp, T scale, T shift);
+
+    template <class T>
+    void exp(const csl::Stream& stream, csl::Span<T> output, csl::View<T> input, T normScale, T normShift);
 
 }}}} /* namespace cv::dnn::cuda4dnn::kernels */
 

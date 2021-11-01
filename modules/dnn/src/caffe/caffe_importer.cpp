@@ -306,16 +306,13 @@ public:
 
         caffe::LayerParameter* binLayer = netBinary.mutable_layer(li);
         const int numBlobs = binLayer->blobs_size();
+        std::vector<caffe::BlobProto*> blobs(numBlobs);
+        binLayer->mutable_blobs()->ExtractSubrange(0, numBlobs, blobs.data());
         layerParams.blobs.resize(numBlobs);
         for (int bi = 0; bi < numBlobs; bi++)
         {
-            blobFromProto(binLayer->blobs(bi), layerParams.blobs[bi]);
-        }
-        binLayer->clear_blobs();
-        CV_Assert(numBlobs == binLayer->blobs().ClearedCount());
-        for (int bi = 0; bi < numBlobs; bi++)
-        {
-            delete binLayer->mutable_blobs()->ReleaseCleared();
+            blobFromProto(*blobs[bi], layerParams.blobs[bi]);
+            delete blobs[bi];
         }
     }
 
@@ -464,6 +461,35 @@ public:
                 net.mutable_layer(li)->set_bottom(0, layer.top(0));
                 net.mutable_layer(li)->mutable_bottom()->RemoveLast();
                 type = "Eltwise";
+            }
+            else if (type == "Resample")
+            {
+                CV_Assert(layer.bottom_size() == 1 || layer.bottom_size() == 2);
+                type = "Resize";
+                String interp = toLowerCase(layerParams.get<String>("type"));
+                layerParams.set("interpolation", interp == "linear" ? "bilinear" : interp);
+
+                if (layerParams.has("factor"))
+                {
+                    float factor = layerParams.get<float>("factor");
+                    CV_Assert(layer.bottom_size() != 2 || factor == 1.0);
+                    layerParams.set("zoom_factor", factor);
+
+                    if ((interp == "linear" && factor != 1.0) ||
+                        (interp == "nearest" && factor < 1.0))
+                        CV_Error(Error::StsNotImplemented, "Unsupported Resample mode");
+                }
+            }
+            else if ("Convolution" == type)
+            {
+                CV_Assert(layer.bottom_size() == layer.top_size());
+                for (int i = 0; i < layer.bottom_size(); i++)
+                {
+                    int conv_id = dstNet.addLayer(layer.top(i), type, layerParams);
+                    addInput(layer.bottom(i), conv_id, 0, dstNet);
+                    addedBlobs.push_back(BlobNote(layer.top(i), conv_id, 0));
+                }
+                continue;
             }
             else if ("ConvolutionDepthwise" == type)
             {

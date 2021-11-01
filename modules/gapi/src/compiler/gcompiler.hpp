@@ -29,7 +29,7 @@ class GAPI_EXPORTS GCompiler
     cv::gapi::GKernelPackage m_all_kernels;
     cv::gapi::GNetPackage    m_all_networks;
 
-    // Patters built from transformations
+    // Patterns built from transformations
     std::vector<std::unique_ptr<ade::Graph>> m_all_patterns;
 
 
@@ -58,6 +58,8 @@ public:
     GCompiled   produceCompiled(GPtr &&pg);    // Produce GCompiled from processed GModel
     GStreamingCompiled  produceStreamingCompiled(GPtr &&pg); // Produce GStreamingCompiled from processed GMbodel
     static void runMetaPasses(ade::Graph &g, const cv::GMetaArgs &metas);
+
+    static GPtr makeGraph(const cv::GComputation::Priv &);
 };
 
 }}

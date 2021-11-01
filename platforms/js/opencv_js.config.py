@@ -1,29 +1,117 @@
 # Classes and methods whitelist
-core = {'': ['absdiff', 'add', 'addWeighted', 'bitwise_and', 'bitwise_not', 'bitwise_or', 'bitwise_xor', 'cartToPolar',\
-             'compare', 'convertScaleAbs', 'copyMakeBorder', 'countNonZero', 'determinant', 'dft', 'divide', 'eigen', \
-             'exp', 'flip', 'getOptimalDFTSize','gemm', 'hconcat', 'inRange', 'invert', 'kmeans', 'log', 'magnitude', \
-             'max', 'mean', 'meanStdDev', 'merge', 'min', 'minMaxLoc', 'mixChannels', 'multiply', 'norm', 'normalize', \
-             'perspectiveTransform', 'polarToCart', 'pow', 'randn', 'randu', 'reduce', 'repeat', 'rotate', 'setIdentity', 'setRNGSeed', \
-             'solve', 'solvePoly', 'split', 'sqrt', 'subtract', 'trace', 'transform', 'transpose', 'vconcat'],
-        'Algorithm': []}
 
-imgproc = {'': ['Canny', 'GaussianBlur', 'Laplacian', 'HoughLines', 'HoughLinesP', 'HoughCircles', 'Scharr','Sobel', \
-                'adaptiveThreshold','approxPolyDP','arcLength','bilateralFilter','blur','boundingRect','boxFilter',\
-                'calcBackProject','calcHist','circle','compareHist','connectedComponents','connectedComponentsWithStats', \
-                'contourArea', 'convexHull', 'convexityDefects', 'cornerHarris','cornerMinEigenVal','createCLAHE', \
-                'createLineSegmentDetector','cvtColor','demosaicing','dilate', 'distanceTransform','distanceTransformWithLabels', \
-                'drawContours','ellipse','ellipse2Poly','equalizeHist','erode', 'filter2D', 'findContours','fitEllipse', \
-                'fitLine', 'floodFill','getAffineTransform', 'getPerspectiveTransform', 'getRotationMatrix2D', 'getStructuringElement', \
-                'goodFeaturesToTrack','grabCut','initUndistortRectifyMap', 'integral','integral2', 'isContourConvex', 'line', \
-                'matchShapes', 'matchTemplate','medianBlur', 'minAreaRect', 'minEnclosingCircle', 'moments', 'morphologyEx', \
-                'pointPolygonTest', 'putText','pyrDown','pyrUp','rectangle','remap', 'resize','sepFilter2D','threshold', \
-                'undistort','warpAffine','warpPerspective','warpPolar','watershed', \
-                'fillPoly', 'fillConvexPoly'],
-           'CLAHE': ['apply', 'collectGarbage', 'getClipLimit', 'getTilesGridSize', 'setClipLimit', 'setTilesGridSize']}
+core = {
+    '': [
+        'absdiff', 'add', 'addWeighted', 'bitwise_and', 'bitwise_not', 'bitwise_or', 'bitwise_xor', 'cartToPolar',
+        'compare', 'convertScaleAbs', 'copyMakeBorder', 'countNonZero', 'determinant', 'dft', 'divide', 'eigen',
+        'exp', 'flip', 'getOptimalDFTSize','gemm', 'hconcat', 'inRange', 'invert', 'kmeans', 'log', 'magnitude',
+        'max', 'mean', 'meanStdDev', 'merge', 'min', 'minMaxLoc', 'mixChannels', 'multiply', 'norm', 'normalize',
+        'perspectiveTransform', 'polarToCart', 'pow', 'randn', 'randu', 'reduce', 'repeat', 'rotate', 'setIdentity', 'setRNGSeed',
+        'solve', 'solvePoly', 'split', 'sqrt', 'subtract', 'trace', 'transform', 'transpose', 'vconcat',
+        'setLogLevel', 'getLogLevel',
+    ],
+    'Algorithm': [],
+}
+
+imgproc = {
+    '': [
+        'Canny',
+        'GaussianBlur',
+        'Laplacian',
+        'HoughLines',
+        'HoughLinesP',
+        'HoughCircles',
+        'Scharr',
+        'Sobel',
+        'adaptiveThreshold',
+        'approxPolyDP',
+        'arcLength',
+        'bilateralFilter',
+        'blur',
+        'boundingRect',
+        'boxFilter',
+        'calcBackProject',
+        'calcHist',
+        'circle',
+        'compareHist',
+        'connectedComponents',
+        'connectedComponentsWithStats',
+        'contourArea',
+        'convexHull',
+        'convexityDefects',
+        'cornerHarris',
+        'cornerMinEigenVal',
+        'createCLAHE',
+        'createLineSegmentDetector',
+        'cvtColor',
+        'demosaicing',
+        'dilate',
+        'distanceTransform',
+        'distanceTransformWithLabels',
+        'drawContours',
+        'ellipse',
+        'ellipse2Poly',
+        'equalizeHist',
+        'erode',
+        'filter2D',
+        'findContours',
+        'fitEllipse',
+        'fitLine',
+        'floodFill',
+        'getAffineTransform',
+        'getPerspectiveTransform',
+        'getRotationMatrix2D',
+        'getStructuringElement',
+        'goodFeaturesToTrack',
+        'grabCut',
+        #'initUndistortRectifyMap',  # 4.x: moved to calib3d
+        'integral',
+        'integral2',
+        'isContourConvex',
+        'line',
+        'matchShapes',
+        'matchTemplate',
+        'medianBlur',
+        'minAreaRect',
+        'minEnclosingCircle',
+        'moments',
+        'morphologyEx',
+        'pointPolygonTest',
+        'putText',
+        'pyrDown',
+        'pyrUp',
+        'rectangle',
+        'remap',
+        'resize',
+        'sepFilter2D',
+        'threshold',
+        #'undistort',  # 4.x: moved to calib3d
+        'warpAffine',
+        'warpPerspective',
+        'warpPolar',
+        'watershed',
+        'fillPoly',
+        'fillConvexPoly',
+        'polylines',
+    ],
+    'CLAHE': ['apply', 'collectGarbage', 'getClipLimit', 'getTilesGridSize', 'setClipLimit', 'setTilesGridSize'],
+    'segmentation_IntelligentScissorsMB': [
+        'IntelligentScissorsMB',
+        'setWeights',
+        'setGradientMagnitudeMaxLimit',
+        'setEdgeFeatureZeroCrossingParameters',
+        'setEdgeFeatureCannyParameters',
+        'applyImage',
+        'applyImageFeatures',
+        'buildMap',
+        'getContour'
+    ],
+}
 
 objdetect = {'': ['groupRectangles'],
              'HOGDescriptor': ['load', 'HOGDescriptor', 'getDefaultPeopleDetector', 'getDaimlerPeopleDetector', 'setSVMDetector', 'detectMultiScale'],
-             'CascadeClassifier': ['load', 'detectMultiScale2', 'CascadeClassifier', 'detectMultiScale3', 'empty', 'detectMultiScale']}
+             'CascadeClassifier': ['load', 'detectMultiScale2', 'CascadeClassifier', 'detectMultiScale3', 'empty', 'detectMultiScale'],
+             'QRCodeDetector': ['QRCodeDetector', 'decode', 'decodeCurved', 'detect', 'detectAndDecode', 'detectMulti', 'setEpsX', 'setEpsY']}
 
 video = {'': ['CamShift', 'calcOpticalFlowFarneback', 'calcOpticalFlowPyrLK', 'createBackgroundSubtractorMOG2', \
              'findTransformECC', 'meanShift'],
@@ -74,9 +162,31 @@ aruco = {'': ['detectMarkers', 'drawDetectedMarkers', 'drawAxis', 'estimatePoseS
         'aruco_Board': ['create'],
         'aruco_GridBoard': ['create', 'draw'],
         'aruco_CharucoBoard': ['create', 'draw'],
+        'aruco_DetectorParameters': ['create']
         }
 
-calib3d = {'': ['findHomography', 'calibrateCameraExtended', 'drawFrameAxes', 'estimateAffine2D', 'getDefaultNewCameraMatrix', 'initUndistortRectifyMap', 'Rodrigues']}
+calib3d = {
+    '': [
+        'findHomography',
+        'calibrateCameraExtended',
+        'drawFrameAxes',
+        'estimateAffine2D',
+        'getDefaultNewCameraMatrix',
+        'initUndistortRectifyMap',
+        'Rodrigues',
+        'solvePnP',
+        'solvePnPRansac',
+        'solvePnPRefineLM',
+        'projectPoints',
+        'undistort',
 
+        # cv::fisheye namespace
+        'fisheye_initUndistortRectifyMap',
+        'fisheye_projectPoints',
+    ],
+}
 
 white_list = makeWhiteList([core, imgproc, objdetect, video, dnn, features2d, photo, aruco, calib3d])
+
+# namespace_prefix_override['dnn'] = ''  # compatibility stuff (enabled by default)
+# namespace_prefix_override['aruco'] = ''  # compatibility stuff (enabled by default)
