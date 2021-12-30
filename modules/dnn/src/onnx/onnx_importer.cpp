@@ -12,8 +12,11 @@
 
 #include <opencv2/core/utils/logger.defines.hpp>
 #undef CV_LOG_STRIP_LEVEL
-#define CV_LOG_STRIP_LEVEL CV_LOG_LEVEL_DEBUG + 1
+#define CV_LOG_STRIP_LEVEL CV_LOG_LEVEL_VERBOSE + 1
 #include <opencv2/core/utils/logger.hpp>
+
+#include <opencv2/core/utils/configuration.private.hpp>
+
 
 #ifdef HAVE_PROTOBUF
 
@@ -23,6 +26,10 @@
 #include <limits>
 #include <algorithm>
 
+#if defined _MSC_VER && _MSC_VER < 1910/*MSVS 2017*/
+#pragma warning(push)
+#pragma warning(disable: 4503)  // decorated name length exceeded, name was truncated
+#endif
 
 #if defined(__GNUC__) && __GNUC__ >= 5
 #pragma GCC diagnostic push
@@ -40,8 +47,6 @@ namespace dnn {
 CV__DNN_INLINE_NS_BEGIN
 
 extern bool DNN_DIAGNOSTICS_RUN;
-
-class ONNXLayerHandler;
 
 class ONNXImporter
 {
@@ -75,7 +80,7 @@ public:
     void populateNet();
 
 protected:
-    std::unique_ptr<ONNXLayerHandler> layerHandler;
+    std::unique_ptr<detail::LayerHandler> missingLayerHandler;
     Net& dstNet;
 
     opencv_onnx::GraphProto graph_proto;
@@ -93,13 +98,16 @@ protected:
     void handleNode(const opencv_onnx::NodeProto& node_proto);
 
 private:
-    friend class ONNXLayerHandler;
     typedef void (ONNXImporter::*ONNXImporterNodeParser)(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     typedef std::map<std::string, ONNXImporterNodeParser> DispatchMap;
+    typedef std::map<std::string, DispatchMap> DomainDispatchMap;
 
-    const DispatchMap dispatch;
-    static const DispatchMap buildDispatchMap();
+    DomainDispatchMap domain_dispatch_map;
+    void buildDispatchMap_ONNX_AI(int opset_version);
+    void buildDispatchMap_COM_MICROSOFT(int opset_version);
 
+    // Domain: 'ai.onnx' (default)
+    // URL: https://github.com/onnx/onnx/blob/master/docs/Operators.md
     void parseArg                  (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseMaxUnpool            (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseMaxPool              (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
@@ -148,6 +156,9 @@ private:
     void parseSoftMax              (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseDetectionOutput      (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseCumSum               (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
+
+    // Domain: com.microsoft
+    // URL: https://github.com/microsoft/onnxruntime/blob/master/docs/ContribOperators.md
     void parseQuantDequant         (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseQConv                (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseQMatMul              (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
@@ -157,40 +168,21 @@ private:
     void parseQAvgPool             (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
     void parseQConcat              (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
 
+    // '???' domain or '???' layer type
     void parseCustomLayer          (LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto);
+
+    int onnx_opset;  // OperatorSetIdProto for 'onnx' domain
+    std::map<std::string, int> onnx_opset_map;  // map from OperatorSetIdProto
+    void parseOperatorSet();
+
+    const std::string str_domain_ai_onnx = "ai.onnx";
 };
 
-class ONNXLayerHandler : public detail::LayerHandler
-{
-public:
-    explicit ONNXLayerHandler(ONNXImporter* importer_);
-
-    void fillRegistry(const opencv_onnx::GraphProto& net);
-
-protected:
-    ONNXImporter* importer;
-};
-
-ONNXLayerHandler::ONNXLayerHandler(ONNXImporter* importer_) : importer(importer_){}
-
-void ONNXLayerHandler::fillRegistry(const opencv_onnx::GraphProto &net)
-{
-    int layersSize = net.node_size();
-    for (int li = 0; li < layersSize; li++) {
-        const opencv_onnx::NodeProto &node_proto = net.node(li);
-        const std::string& name = node_proto.output(0);
-        const std::string& type = node_proto.op_type();
-        if (importer->dispatch.find(type) == importer->dispatch.end())
-        {
-            addMissing(name, type);
-        }
-    }
-    printMissing();
-}
 
 ONNXImporter::ONNXImporter(Net& net, const char *onnxFile)
-    : layerHandler(DNN_DIAGNOSTICS_RUN ?  new ONNXLayerHandler(this) : nullptr),
-        dstNet(net), dispatch(buildDispatchMap())
+    : missingLayerHandler(DNN_DIAGNOSTICS_RUN ? new detail::LayerHandler() : nullptr)
+    , dstNet(net)
+    , onnx_opset(0)
 {
     hasDynamicShapes = false;
     CV_Assert(onnxFile);
@@ -211,7 +203,9 @@ ONNXImporter::ONNXImporter(Net& net, const char *onnxFile)
 }
 
 ONNXImporter::ONNXImporter(Net& net, const char* buffer, size_t sizeBuffer)
-    : layerHandler(DNN_DIAGNOSTICS_RUN ?  new ONNXLayerHandler(this) : nullptr), dstNet(net), dispatch(buildDispatchMap())
+    : missingLayerHandler(DNN_DIAGNOSTICS_RUN ? new detail::LayerHandler() : nullptr)
+    , dstNet(net)
+    , onnx_opset(0)
 {
     hasDynamicShapes = false;
     CV_LOG_DEBUG(NULL, "DNN/ONNX: processing in-memory ONNX model (" << sizeBuffer << " bytes)");
@@ -240,6 +234,53 @@ inline void replaceLayerParam(LayerParams& layerParams, const String& oldKey, co
         layerParams.set(newKey, layerParams.get(oldKey));
         layerParams.erase(oldKey);
     }
+}
+
+static
+void dumpValueInfoProto(int i, const opencv_onnx::ValueInfoProto& valueInfoProto, const std::string& prefix)
+{
+    CV_Assert(valueInfoProto.has_name());
+    CV_Assert(valueInfoProto.has_type());
+    const opencv_onnx::TypeProto& typeProto = valueInfoProto.type();
+    CV_Assert(typeProto.has_tensor_type());
+    const opencv_onnx::TypeProto::Tensor& tensor = typeProto.tensor_type();
+    CV_Assert(tensor.has_shape());
+    const opencv_onnx::TensorShapeProto& tensorShape = tensor.shape();
+
+    int dim_size = tensorShape.dim_size();
+    CV_CheckGE(dim_size, 0, "");
+    MatShape shape(dim_size);
+    for (int j = 0; j < dim_size; ++j)
+    {
+        const opencv_onnx::TensorShapeProto_Dimension& dimension = tensorShape.dim(j);
+        if (dimension.has_dim_param())
+        {
+            CV_LOG_DEBUG(NULL, "DNN/ONNX: " << prefix << "[" << i << "] dim[" << j << "] = <" << dimension.dim_param() << "> (dynamic)");
+        }
+        // https://github.com/onnx/onnx/blob/master/docs/DimensionDenotation.md#denotation-definition
+        if (dimension.has_denotation())
+        {
+            CV_LOG_INFO(NULL, "DNN/ONNX: " << prefix << "[" << i << "] dim[" << j << "] denotation is '" << dimension.denotation() << "'");
+        }
+        shape[j] = dimension.dim_value();
+    }
+    CV_LOG_DEBUG(NULL, "DNN/ONNX: " << prefix << "[" << i << " as '" << valueInfoProto.name() << "'] shape=" << toString(shape));
+}
+
+static
+void dumpTensorProto(int i, const opencv_onnx::TensorProto& tensorProto, const std::string& prefix)
+{
+    if (utils::logging::getLogLevel() < utils::logging::LOG_LEVEL_VERBOSE)
+        return;
+    int dim_size = tensorProto.dims_size();
+    CV_CheckGE(dim_size, 0, "");
+    MatShape shape(dim_size);
+    for (int j = 0; j < dim_size; ++j)
+    {
+        int sz = static_cast<int>(tensorProto.dims(j));
+        shape[j] = sz;
+    }
+    CV_LOG_VERBOSE(NULL, 0, "DNN/ONNX: " << prefix << "[" << i << " as '" << tensorProto.name() << "'] shape=" << toString(shape) << " data_type=" << (int)tensorProto.data_type());
 }
 
 void releaseONNXTensor(opencv_onnx::TensorProto& tensor_proto)
@@ -282,21 +323,21 @@ void runLayer(LayerParams& params, const std::vector<Mat>& inputs,
 std::map<std::string, Mat> ONNXImporter::getGraphTensors(
                                         const opencv_onnx::GraphProto& graph_proto)
 {
-  opencv_onnx::TensorProto tensor_proto;
-  std::map<std::string, Mat> layers_weights;
+    std::map<std::string, Mat> layers_weights;
 
-  for (int i = 0; i < graph_proto.initializer_size(); i++)
-  {
-    tensor_proto = graph_proto.initializer(i);
-    Mat mat = getMatFromTensor(tensor_proto);
-    releaseONNXTensor(tensor_proto);
+    for (int i = 0; i < graph_proto.initializer_size(); i++)
+    {
+        const opencv_onnx::TensorProto& tensor_proto = graph_proto.initializer(i);
+        dumpTensorProto(i, tensor_proto, "initializer");
+        Mat mat = getMatFromTensor(tensor_proto);
+        releaseONNXTensor(const_cast<opencv_onnx::TensorProto&>(tensor_proto));  // drop already loaded data
 
-    if (DNN_DIAGNOSTICS_RUN && mat.empty())
-        continue;
+        if (DNN_DIAGNOSTICS_RUN && mat.empty())
+            continue;
 
-    layers_weights.insert(std::make_pair(tensor_proto.name(), mat));
-  }
-  return layers_weights;
+        layers_weights.insert(std::make_pair(tensor_proto.name(), mat));
+    }
+    return layers_weights;
 }
 
 static DictValue parse(const ::google::protobuf::RepeatedField< ::google::protobuf::int64>& src) {
@@ -562,8 +603,60 @@ void ONNXImporter::addNegation(const LayerParams& layerParams, opencv_onnx::Node
 
 void ONNXImporter::addConstant(const std::string& name, const Mat& blob)
 {
+    CV_LOG_DEBUG(NULL, "DNN/ONNX: add constant '" << name << "' shape=" << toString(shape(blob)) << ": " << toString(blob));
     constBlobs.insert(std::make_pair(name, blob));
     outShapes.insert(std::make_pair(name, shape(blob)));
+}
+
+void ONNXImporter::parseOperatorSet()
+{
+    int ir_version = model_proto.has_ir_version() ? static_cast<int>(model_proto.ir_version()) : -1;
+    if (ir_version < 3)
+        return;
+
+    int opset_size = model_proto.opset_import_size();
+    if (opset_size <= 0)
+    {
+        CV_LOG_INFO(NULL, "DNN/ONNX: missing opset information")
+        return;
+    }
+
+    for (int i = 0; i < opset_size; ++i)
+    {
+        const ::opencv_onnx::OperatorSetIdProto& opset_entry = model_proto.opset_import(i);
+        const std::string& domain = opset_entry.has_domain() ? opset_entry.domain() : std::string();
+        int version = opset_entry.has_version() ? opset_entry.version() : -1;
+        if (domain.empty() || domain == str_domain_ai_onnx)
+        {
+            // ONNX opset covered by specification: https://github.com/onnx/onnx/blob/master/docs/Operators.md
+            onnx_opset = std::max(onnx_opset, version);
+            onnx_opset_map[str_domain_ai_onnx] = onnx_opset;
+        }
+        else
+        {
+            CV_LOG_DEBUG(NULL, "DNN/ONNX: using non-standard ONNX opset[" << i << "]: domain='" << domain << "' version=" << version);
+            onnx_opset_map[domain] = onnx_opset;
+        }
+    }
+
+    CV_LOG_INFO(NULL, "DNN/ONNX: ONNX opset version = " << onnx_opset);
+
+    buildDispatchMap_ONNX_AI(onnx_opset);
+    for (const auto& pair : onnx_opset_map)
+    {
+        if (pair.first == str_domain_ai_onnx)
+        {
+            continue;  // done above
+        }
+        else if (pair.first == "com.microsoft")
+        {
+            buildDispatchMap_COM_MICROSOFT(pair.second);
+        }
+        else
+        {
+            CV_LOG_INFO(NULL, "DNN/ONNX: unknown domain='" << pair.first << "' version=" << pair.second << ". No dispatch map, you may need to register 'custom' layers.");
+        }
+    }
 }
 
 void ONNXImporter::handleQuantizedNode(LayerParams& layerParams,
@@ -627,59 +720,81 @@ void ONNXImporter::populateNet()
             << " model produced by '" << framework_name << "'"
             << (framework_version.empty() ? cv::String() : cv::format(":%s", framework_version.c_str()))
             << ". Number of nodes = " << graph_proto.node_size()
+            << ", initializers = " << graph_proto.initializer_size()
             << ", inputs = " << graph_proto.input_size()
             << ", outputs = " << graph_proto.output_size()
             );
+
+    parseOperatorSet();
 
     simplifySubgraphs(graph_proto);
 
     const int layersSize = graph_proto.node_size();
     CV_LOG_DEBUG(NULL, "DNN/ONNX: graph simplified to " << layersSize << " nodes");
 
-    constBlobs = getGraphTensors(graph_proto);
+    constBlobs = getGraphTensors(graph_proto);  // scan GraphProto.initializer
+    std::vector<String> netInputs;  // map with network inputs (without const blobs)
     // Add all the inputs shapes. It includes as constant blobs as network's inputs shapes.
     for (int i = 0; i < graph_proto.input_size(); ++i)
     {
         const opencv_onnx::ValueInfoProto& valueInfoProto = graph_proto.input(i);
         CV_Assert(valueInfoProto.has_name());
+        const std::string& name = valueInfoProto.name();
         CV_Assert(valueInfoProto.has_type());
-        opencv_onnx::TypeProto typeProto = valueInfoProto.type();
+        const opencv_onnx::TypeProto& typeProto = valueInfoProto.type();
         CV_Assert(typeProto.has_tensor_type());
-        opencv_onnx::TypeProto::Tensor tensor = typeProto.tensor_type();
+        const opencv_onnx::TypeProto::Tensor& tensor = typeProto.tensor_type();
         CV_Assert(tensor.has_shape());
-        opencv_onnx::TensorShapeProto tensorShape = tensor.shape();
+        const opencv_onnx::TensorShapeProto& tensorShape = tensor.shape();
 
-        MatShape inpShape(tensorShape.dim_size());
-        for (int j = 0; j < inpShape.size(); ++j)
+        int dim_size = tensorShape.dim_size();
+        CV_CheckGE(dim_size, 0, "");  // some inputs are scalars (dims=0), e.g. in Test_ONNX_nets.Resnet34_kinetics test
+        MatShape inpShape(dim_size);
+        for (int j = 0; j < dim_size; ++j)
         {
-            inpShape[j] = tensorShape.dim(j).dim_value();
+            const opencv_onnx::TensorShapeProto_Dimension& dimension = tensorShape.dim(j);
+            if (dimension.has_dim_param())
+            {
+                CV_LOG_DEBUG(NULL, "DNN/ONNX: input[" << i << "] dim[" << j << "] = <" << dimension.dim_param() << "> (dynamic)");
+            }
+            // https://github.com/onnx/onnx/blob/master/docs/DimensionDenotation.md#denotation-definition
+            if (dimension.has_denotation())
+            {
+                CV_LOG_INFO(NULL, "DNN/ONNX: input[" << i << "] dim[" << j << "] denotation is '" << dimension.denotation() << "'");
+            }
+            inpShape[j] = dimension.dim_value();
             // NHW, NCHW(NHWC), NCDHW(NDHWC); do not set this flag if only N is dynamic
-            if (!tensorShape.dim(j).dim_param().empty() && !(j == 0 && inpShape.size() >= 3))
+            if (dimension.has_dim_param() && !(j == 0 && inpShape.size() >= 3))
+            {
                 hasDynamicShapes = true;
+            }
         }
-        if (!inpShape.empty() && !hasDynamicShapes)
+        bool isInitialized = ((constBlobs.find(name) != constBlobs.end()));
+        CV_LOG_IF_DEBUG(NULL, !isInitialized, "DNN/ONNX: input[" << i << " as '" << name << "'] shape=" << toString(inpShape));
+        CV_LOG_IF_VERBOSE(NULL, 0, isInitialized, "DNN/ONNX: pre-initialized input[" << i << " as '" << name << "'] shape=" << toString(inpShape));
+        if (dim_size > 0 && !hasDynamicShapes)  // FIXIT result is not reliable for models with multiple inputs
         {
             inpShape[0] = std::max(inpShape[0], 1); // It's OK to have undetermined batch size
         }
         outShapes[valueInfoProto.name()] = inpShape;
-    }
-
-    // create map with network inputs (without const blobs)
-    // fill map: push layer name, layer id and output id
-    std::vector<String> netInputs;
-    for (int j = 0; j < graph_proto.input_size(); j++)
-    {
-        const std::string& name = graph_proto.input(j).name();
-        if (constBlobs.find(name) == constBlobs.end()) {
+        // fill map: push layer name, layer id and output id
+        if (!isInitialized)
+        {
             netInputs.push_back(name);
             layer_id.insert(std::make_pair(name, LayerInfo(0, netInputs.size() - 1)));
         }
     }
+
     dstNet.setInputsNames(netInputs);
+
+    // dump outputs
+    for (int i = 0; i < graph_proto.output_size(); ++i)
+    {
+        dumpValueInfoProto(i, graph_proto.output(i), "output");
+    }
 
     if (DNN_DIAGNOSTICS_RUN) {
         CV_LOG_INFO(NULL, "DNN/ONNX: start diagnostic run!");
-        layerHandler->fillRegistry(graph_proto);
     }
 
     for(int li = 0; li < layersSize; li++)
@@ -694,11 +809,52 @@ void ONNXImporter::populateNet()
 void ONNXImporter::handleNode(const opencv_onnx::NodeProto& node_proto)
 {
     CV_Assert(node_proto.output_size() >= 1);
-    std::string name = node_proto.output(0);
+    const std::string& name = node_proto.output(0);
     const std::string& layer_type = node_proto.op_type();
-    CV_LOG_DEBUG(NULL, "DNN/ONNX: processing node with " << node_proto.input_size() << " inputs and " << node_proto.output_size() << " outputs: "
-            << cv::format("[%s]:(%s)", layer_type.c_str(), name.c_str())
-    );
+    const std::string& layer_type_domain = [&]()
+    {
+        if (!node_proto.has_domain())
+            return str_domain_ai_onnx;
+        const std::string& domain = node_proto.domain();
+        if (domain.empty())
+            return str_domain_ai_onnx;
+        return domain;
+    }();
+    const auto& dispatch = [&]()
+    {
+        if (layer_type_domain != str_domain_ai_onnx)
+        {
+            if (onnx_opset_map.find(layer_type_domain) == onnx_opset_map.end())
+            {
+                CV_LOG_WARNING(NULL, "DNN/ONNX: processing node with " << node_proto.input_size() << " inputs and " << node_proto.output_size() << " outputs: "
+                        << cv::format("[%s]:(%s)", layer_type.c_str(), name.c_str())
+                        << " from undeclared domain='" << layer_type_domain << "'"
+                );
+            }
+            else
+            {
+                CV_LOG_DEBUG(NULL, "DNN/ONNX: processing node with " << node_proto.input_size() << " inputs and " << node_proto.output_size() << " outputs: "
+                        << cv::format("[%s]:(%s)", layer_type.c_str(), name.c_str())
+                        << " from domain='" << layer_type_domain << "'"
+                );
+            }
+            auto it = domain_dispatch_map.find(layer_type_domain);
+            if (it == domain_dispatch_map.end())
+            {
+                CV_LOG_WARNING(NULL, "DNN/ONNX: missing dispatch map for domain='" << layer_type_domain << "'");
+                return DispatchMap();
+            }
+            return it->second;
+        }
+        else
+        {
+            CV_LOG_DEBUG(NULL, "DNN/ONNX: processing node with " << node_proto.input_size() << " inputs and " << node_proto.output_size() << " outputs: "
+                    << cv::format("[%s]:(%s)", layer_type.c_str(), name.c_str())
+            );
+            return domain_dispatch_map[str_domain_ai_onnx];
+        }
+    }();
+
     LayerParams layerParams;
     try
     {
@@ -726,7 +882,9 @@ void ONNXImporter::handleNode(const opencv_onnx::NodeProto& node_proto)
         if (DNN_DIAGNOSTICS_RUN)
         {
             CV_LOG_ERROR(NULL, "DNN/ONNX: Potential problem during processing node with " << node_proto.input_size() << " inputs and " << node_proto.output_size() << " outputs: "
-                    << cv::format("[%s]:(%s)", layer_type.c_str(), name.c_str()) << "\n" << e.msg
+                    << cv::format("[%s]:(%s)", layer_type.c_str(), name.c_str())
+                    << " from domain='" << layer_type_domain << "'"
+                    << "\n" << e.msg
             );
             cv::AutoLock lock(getLayerFactoryMutex());
             auto registeredLayers = getLayerFactoryImpl();
@@ -747,6 +905,7 @@ void ONNXImporter::handleNode(const opencv_onnx::NodeProto& node_proto)
         {
             CV_LOG_ERROR(NULL, "DNN/ONNX: ERROR during processing node with " << node_proto.input_size() << " inputs and " << node_proto.output_size() << " outputs: "
                     << cv::format("[%s]:(%s)", layer_type.c_str(), name.c_str())
+                    << " from domain='" << layer_type_domain << "'"
             );
         }
         for (int i = 0; i < node_proto.input_size(); i++)
@@ -766,7 +925,7 @@ void ONNXImporter::handleNode(const opencv_onnx::NodeProto& node_proto)
             }
         }
         else
-            CV_Error(Error::StsError, cv::format("Node [%s]:(%s) parse error: %s", layer_type.c_str(), name.c_str(), e.what()));
+            CV_Error(Error::StsError, cv::format("Node [%s@%s]:(%s) parse error: %s", layer_type.c_str(), layer_type_domain.c_str(), name.c_str(), e.what()));
     }
 }
 
@@ -1711,7 +1870,16 @@ void ONNXImporter::parseMul(LayerParams& layerParams, const opencv_onnx::NodePro
         blob = blob.reshape(1, 1);
         if (blob.total() == 1) {
             float blob_value = blob.ptr<float>()[0];
-            float coeff = isDiv ? 1.0 / blob_value : blob_value;
+            float coeff = blob_value;
+            if (isDiv)
+            {
+                coeff = 1.f / blob_value;
+                if (constId == 0)
+                {
+                    // Power layer calculates (x*scale + shift)^power, so const/x -> (x * (1/const) + 0)^(-1)
+                    layerParams.set("power", -1.f);
+                }
+            }
             layerParams.set("scale", coeff);
             layerParams.type = "Power";
         }
@@ -2332,11 +2500,24 @@ void ONNXImporter::parseShape(LayerParams& layerParams, const opencv_onnx::NodeP
     CV_Assert(shapeIt != outShapes.end());
     const MatShape& inpShape = shapeIt->second;
 
-    Mat shapeMat(inpShape.size(), 1, CV_32S);
-    for (int j = 0; j < inpShape.size(); ++j)
-        shapeMat.at<int>(j) = inpShape[j];
-    shapeMat.dims = 1;
+    int dims = static_cast<int>(inpShape.size());
+    Mat shapeMat(dims, 1, CV_32S);
+    bool isDynamicShape = false;
+    for (int j = 0; j < dims; ++j)
+    {
+        int sz = inpShape[j];
+        isDynamicShape |= (sz == 0);
+        shapeMat.at<int>(j) = sz;
+    }
+    shapeMat.dims = 1;  // FIXIT Mat 1D
 
+    if (isDynamicShape)
+    {
+        CV_LOG_ERROR(NULL, "DNN/ONNX(Shape): dynamic 'zero' shapes are not supported, input " << toString(inpShape, node_proto.input(0)));
+        // FIXIT repair assertion
+        // Disabled to pass face detector tests from #20422
+        // CV_Assert(!isDynamicShape);  // not supported
+    }
     addConstant(layerParams.name, shapeMat);
 }
 
@@ -2533,6 +2714,7 @@ void ONNXImporter::parseConcat(LayerParams& layerParams, const opencv_onnx::Node
     addLayer(layerParams, node_proto);
 }
 
+// https://github.com/onnx/onnx/blob/master/docs/Operators.md#Resize
 void ONNXImporter::parseResize(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
 {
     for (int i = 1; i < node_proto.input_size(); i++)
@@ -2556,30 +2738,38 @@ void ONNXImporter::parseResize(LayerParams& layerParams, const opencv_onnx::Node
     if (layerParams.get<String>("mode") == "linear" && framework_name == "pytorch")
         layerParams.set("mode", "opencv_linear");
 
-    // input = [X, scales], [X, roi, scales] or [x, roi, scales, sizes]
-    int foundScaleId = hasDynamicShapes ? node_proto.input_size() - 1
-                                        : node_proto.input_size() > 2 ? 2 : 1;
+    // opset-10: input = [X, scales]
+    // opset-11: input = [X, roi, scales] or [x, roi, scales, sizes]
+    int scalesInputId = node_proto.input_size() == 2 ? 1 : 2;
 
-    Mat scales = getBlob(node_proto, foundScaleId);
-    if (scales.total() == 4)
+    Mat scales = getBlob(node_proto, scalesInputId);
+    if (!scales.empty())
     {
+        CV_CheckEQ(scales.total(), (size_t)4, "HCHW layout is expected");
         layerParams.set("zoom_factor_y", scales.at<float>(2));
         layerParams.set("zoom_factor_x", scales.at<float>(3));
     }
-    else
+    else if (node_proto.input_size() >= 4)  // opset-11
     {
-        const std::string& inputLast = node_proto.input(node_proto.input_size() - 1);
-        if (constBlobs.find(inputLast) != constBlobs.end())
+        const std::string& inputSizes = node_proto.input(3);
+        if (constBlobs.find(inputSizes) != constBlobs.end())
         {
-            Mat shapes = getBlob(inputLast);
-            CV_CheckEQ(shapes.size[0], 4, "");
-            CV_CheckEQ(shapes.size[1], 1, "");
+            Mat shapes = getBlob(inputSizes);
+            CV_CheckEQ(shapes.total(), (size_t)4, "HCHW layout is expected");
             CV_CheckDepth(shapes.depth(), shapes.depth() == CV_32S || shapes.depth() == CV_32F, "");
             if (shapes.depth() == CV_32F)
                 shapes.convertTo(shapes, CV_32S);
             layerParams.set("width", shapes.at<int>(3));
             layerParams.set("height", shapes.at<int>(2));
         }
+        else
+        {
+            CV_Error(Error::StsNotImplemented, cv::format("ONNX/Resize: doesn't support dynamic non-constant 'sizes' input: %s", inputSizes.c_str()));
+        }
+    }
+    else
+    {
+        CV_Error(Error::StsNotImplemented, "ONNX/Resize: can't find neither 'scale' nor destination sizes parameters");
     }
     replaceLayerParam(layerParams, "mode", "interpolation");
     addLayer(layerParams, node_proto);
@@ -2683,6 +2873,28 @@ void ONNXImporter::parseCumSum(LayerParams& layerParams, const opencv_onnx::Node
 
 void ONNXImporter::parseCustomLayer(LayerParams& layerParams, const opencv_onnx::NodeProto& node_proto)
 {
+    const std::string& name = layerParams.name;
+    std::string& layer_type = layerParams.type;
+    const std::string& layer_type_domain = node_proto.has_domain() ? node_proto.domain() : std::string();
+    if (!layer_type_domain.empty() && layer_type_domain != str_domain_ai_onnx)
+    {
+        // append ONNX domain name
+        static bool DNN_CUSTOM_ONNX_TYPE_INCLUDE_DOMAIN_NAME = utils::getConfigurationParameterBool("OPENCV_DNN_CUSTOM_ONNX_TYPE_INCLUDE_DOMAIN_NAME", true);
+        if (DNN_CUSTOM_ONNX_TYPE_INCLUDE_DOMAIN_NAME)
+        {
+            layer_type = layer_type_domain + "." + layer_type;
+        }
+    }
+
+    CV_LOG_INFO(NULL, "DNN/ONNX: unknown node type, try using custom handler for node with " << node_proto.input_size() << " inputs and " << node_proto.output_size() << " outputs: "
+            << cv::format("[%s]:(%s)", layer_type.c_str(), name.c_str())
+    );
+
+    if (missingLayerHandler)
+    {
+        missingLayerHandler->addMissing(layerParams.name, layerParams.type);
+    }
+
     for (int j = 0; j < node_proto.input_size(); j++) {
         if (layer_id.find(node_proto.input(j)) == layer_id.end())
             layerParams.blobs.push_back(getBlob(node_proto, j));
@@ -3080,8 +3292,11 @@ void ONNXImporter::parseQConcat(LayerParams& layerParams, const opencv_onnx::Nod
     addLayer(layerParams, node_proto);
 }
 
-const ONNXImporter::DispatchMap ONNXImporter::buildDispatchMap()
+// Domain: ai.onnx (default)
+// URL: https://github.com/onnx/onnx/blob/master/docs/Operators.md
+void ONNXImporter::buildDispatchMap_ONNX_AI(int opset_version)
 {
+    CV_UNUSED(opset_version);
     DispatchMap dispatch;
 
     dispatch["ArgMax"] = dispatch["ArgMin"] = &ONNXImporter::parseArg;
@@ -3133,17 +3348,31 @@ const ONNXImporter::DispatchMap ONNXImporter::buildDispatchMap()
     dispatch["SoftMax"] = dispatch["LogSoftmax"] = &ONNXImporter::parseSoftMax;
     dispatch["DetectionOutput"] = &ONNXImporter::parseDetectionOutput;
     dispatch["CumSum"] = &ONNXImporter::parseCumSum;
+
+    // ai.onnx: opset 10+
     dispatch["QuantizeLinear"] = dispatch["DequantizeLinear"] = &ONNXImporter::parseQuantDequant;
     dispatch["QLinearConv"] = &ONNXImporter::parseQConv;
     dispatch["QLinearMatMul"] = &ONNXImporter::parseQMatMul;
+
+    domain_dispatch_map[str_domain_ai_onnx] = dispatch;
+}
+
+// Domain: com.microsoft
+// URL: https://github.com/microsoft/onnxruntime/blob/master/docs/ContribOperators.md
+void ONNXImporter::buildDispatchMap_COM_MICROSOFT(int opset_version)
+{
+    CV_UNUSED(opset_version);
+    DispatchMap dispatch;
+
     dispatch["QLinearAdd"] = dispatch["QLinearMul"] = &ONNXImporter::parseQEltwise;
+    dispatch["QLinearAveragePool"] = dispatch["QLinearGlobalAveragePool"] = &ONNXImporter::parseQAvgPool;
     dispatch["QLinearLeakyRelu"] = &ONNXImporter::parseQLeakyRelu;
     dispatch["QLinearSigmoid"] = &ONNXImporter::parseQSigmoid;
-    dispatch["QLinearAveragePool"] = dispatch["QLinearGlobalAveragePool"] = &ONNXImporter::parseQAvgPool;
     dispatch["QLinearConcat"] = &ONNXImporter::parseQConcat;
 
-    return dispatch;
+    domain_dispatch_map["com.microsoft"] = dispatch;
 }
+
 
 Net readNetFromONNX(const String& onnxFile)
 {
